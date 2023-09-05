@@ -1,6 +1,6 @@
 * Routine for interpolating in tabulated EOS tables
 
-The code is written for tabulated tables in the Pizza format for the [[https://bitbucket.org/FreeTHC/dist][WhiskyTHC]] code in [[https://www.einsteintoolkit.org/][Einstein Toolkit]].
+The code is written for tabulated EOS in the Pizza format for the [[https://bitbucket.org/FreeTHC/dist][WhiskyTHC]] code in [[https://www.einsteintoolkit.org/][Einstein Toolkit]].
 
 ** Dependencies
   - numpy
