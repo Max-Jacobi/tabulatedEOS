@@ -1,0 +1,8 @@
+* Routine for interpolating in tabulated EOS tables
+
+The code is written for tabulated tables in the Pizza format for the [[https://www.einsteintoolkit.org/][Einstein Toolkit]].
+
+** Dependencies
+  - numpy
+  - h5py
+  - [[https://github.com/fguercilena/alpyne][alpyne]]
