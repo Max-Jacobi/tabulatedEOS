@@ -7,7 +7,7 @@ import numpy as np
 from h5py import File  # type: ignore
 import alpyne.uniform_interpolation as ui  # type: ignore
 
-from notable2.Utils import RUnits
+from .Utils import RUnits
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
