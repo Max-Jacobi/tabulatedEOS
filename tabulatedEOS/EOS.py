@@ -1,13 +1,9 @@
-import os
 from abc import ABC, abstractmethod
 from typing import Callable, Optional, TYPE_CHECKING, List, Dict, Tuple
 from functools import reduce
 from warnings import warn
 import numpy as np
-from h5py import File  # type: ignore
 import alpyne.uniform_interpolation as ui  # type: ignore
-
-from .Utils import RUnits
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray, ArrayLike
@@ -76,7 +72,9 @@ class TabulatedEOS(ABC):
     def set_path(self, path: Optional[str]) -> None:
         """
         Sets the path to hdf5 files.
-        This has to overwrite self.name to something different than "Unitilialized"
+        Usually would set something like self.path that is then utilized by self.get_key.
+        Has to overwrite self.name to something different than "Unitilialized"
+        if a not None path argument is given.
         """
         ...
 
@@ -373,67 +371,3 @@ class TabulatedEOS(ABC):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__} with name {self.name}"
-
-
-class PizzaEOS(TabulatedEOS):
-    """Realistic Tabluated EOS """
-    hydro_path: Optional[str]
-    weak_path: Optional[str]
-
-    def __post_init__(self):
-        self.ye_key = "ye"
-        self.temp_key = "temperature"
-        self.rho_key = "density"
-
-        # mass factor in MeV
-        self._mass_fac: Optional[float] = None
-
-    def set_path(self, path: Optional[str]):
-        "EOS path setter"
-        if path is None:
-            self.hydro_path = None
-            self.weak_path = None
-            return
-
-        cactus_base = (os.environ['CACTUS_BASEDIR']
-                       if "CACTUS_BASEDIR" in os.environ else None)
-        if path[0] != '/' and cactus_base is not None:
-            path = f"{cactus_base}/EOSs/{path}"
-
-        self.hydro_path = f"{path}/hydro.h5"
-        self.weak_path = f"{path}/weak.h5"
-        self.name = path.split('/')[-1]
-
-    def get_key(self, key):
-        """Get key from hydro or weak file"""
-        if key in self.data:
-            return self.data[key]
-
-        self._check_initialized()
-
-        scale = dict(
-            rho=RUnits['Rho'],
-            pressure=RUnits["Press"],
-            only_P=RUnits["Press"],
-            internalEnergy=RUnits["Eps"],
-            only_E=RUnits["Eps"],
-            density=RUnits["Rho"],
-        )
-
-        for path in [self.hydro_path, self.weak_path]:
-            with File(path, 'r') as hfile:
-                if key in hfile:
-                    self.data[key] = np.array(hfile[key])
-                    if key in scale:
-                        self.data[key] *= scale[key]
-                    break
-        else:
-            raise KeyError(f"{key} not found in EOS tables in {self}")
-        return self.data[key]
-
-    def get_mbary50(self,) -> float:
-        self._check_initialized()
-        with File(self.hydro_path, 'r') as hfile:
-            mass_fac = hfile['mass_factor'][()]
-        mev_50_msol = 8.962964431087716e-11
-        return mass_fac*mev_50_msol
