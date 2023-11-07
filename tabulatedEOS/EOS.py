@@ -10,272 +10,110 @@ import alpyne.uniform_interpolation as ui  # type: ignore
 from .Utils import RUnits
 
 if TYPE_CHECKING:
-    from numpy.typing import NDArray
+    from numpy.typing import NDArray, ArrayLike
 
 
-class EOS(ABC):
-    """EOS abstract base class"""
+class TabulatedEOS(ABC):
+    """
+    EOS abstract base class for interpolation in tabulated equation of state tables.False
+    To define a new format the following functions have to be set:
+    set_path:
+        Sets the path to hdf5 files.
+        This has to overwrite self.name to something different than "Unitilialized"
+    __post_init__:
+        This function is called after the constructor and should set the following variables:
+        self.ye_key: str
+            Name of the ye key in the hdf5 file
+        self.temp_key: str
+            Name of the temp key in the hdf5 file
+        self.rho_key: str
+            Name of the rho key in the hdf5 file
+    get_key:
+        This function should return the data for the given key.
+    """
 
-    @abstractmethod
-    def get_caller(self,
-                   keys: List[str],
-                   func: Callable = lambda *args: args[0]
-                   ) -> Callable:
-        """
-        Returns a callable for creation of post processed data.
-        func is called with the signature (*data, rho, temp, ye),
-        where data are the arrays generated from keys
-        """
-        ...
-
-    @abstractmethod
-    def get_cold_caller(self,
-                        keys: List[str],
-                        func: Callable = lambda *args: args[0]
-                        ) -> Callable:
-        """
-        Returns a callable for creation of post processed data.
-        func is called with the signature (*data, rho, ye),
-        where data are the arrays generated from keys
-        """
-        ...
-
-    @abstractmethod
-    def get_inf_caller(self,
-                       keys: List[str],
-                       func: Callable = lambda *args: args[0]
-                       ) -> Callable:
-        """
-        Returns a callable for creation of post processed data.
-        func is called with the signature (*data, ye),
-        where data are the arrays generated from keys
-        """
-        ...
-
-    @abstractmethod
-    def get_mbary50(self,) -> float:
-        """
-        Returns the mass of 10^50 baryons in solar masses
-        """
-        ...
-
-
-class TabulatedEOS(EOS):
-    """Realistic Tabluated EOS """
-    hydro_path: Optional[str]
-    weak_path: Optional[str]
     data: Dict[str, 'NDArray[np.float_]']
     name: str
+    ye_key: str
+    temp_key: str
+    rho_key: str
 
     def __init__(self, path: Optional[str] = None):
+        # Interpolation table setup for uniform interpolation
         self._table: Optional[List['NDArray[np.float_]']] = None
-        self._mass_fac: Optional[float] = None
         self._table_cold: Optional[List['NDArray[np.float_]']] = None
-        self._ye_r: Optional[Tuple[float, float]] = None
-        self._temp_r: Optional[Tuple[float, float]] = None
-        self._rho_r: Optional[Tuple[float, float]] = None
+
+        # data to be interpolated, loaded from file when needed and cached
         self.data = {}
+
+        # Ranges of interpolation input
+        self._ye_range: Optional[Tuple[float, float]] = None
+        self._temp_range: Optional[Tuple[float, float]] = None
+        self._rho_range: Optional[Tuple[float, float]] = None
+
         self.name = "Unitilialized"
         self.set_path(path)
 
-    def __str__(self) -> str:
-        return self.name
+        self.__post_init__()
 
-    @property
-    def ye_range(self) -> Tuple[np.float_]:
-        self._check_initialized()
-        if self._ye_r is None:
-            with File(self.hydro_path, 'r') as hfile:
-                Ye = np.array(hfile['ye'])
-            self._ye_r = (Ye[0], Ye[-1])
-        return self._ye_r
+        for key in "ye temp rho".split():
+            if not hasattr(self, f"{key}_key"):
+                raise ValueError(
+                    f"__post_init__ has to initialize self.{key}_key"
+                )
 
-    @property
-    def temp_range(self) -> Tuple[np.float_]:
-        self._check_initialized()
-        if self._temp_r is None:
-            with File(self.hydro_path, 'r') as hfile:
-                Temp = np.array(hfile['temperature'])
-            self._temp_r = (Temp[0], Temp[-1])
-        return self._temp_r
+    @abstractmethod
+    def __post_init__(self):
+        """
+        This has to set
+         - self.ye_key
+         - self.temp_key
+         - self.rho_key
+        """
+        ...
 
-    @property
-    def rho_range(self) -> Tuple[np.float_]:
-        self._check_initialized()
-        if self._rho_r is None:
-            with File(self.hydro_path, 'r') as hfile:
-                Rho = np.array(hfile['density'])*RUnits['Rho']
-            self._rho_r = (Rho[0], Rho[-1])
-        return self._rho_r
+    @abstractmethod
+    def set_path(self, path: Optional[str]) -> None:
+        """
+        Sets the path to hdf5 files.
+        This has to overwrite self.name to something different than "Unitilialized"
+        """
+        ...
+
+    @abstractmethod
+    def get_key(self, key: str) -> "NDArray[np.float_]":
+        """
+        Returns the data for the given key.
+        """
+        ...
 
     @property
     def table(self) -> List['NDArray[np.float_]']:
         self._check_initialized()
         if self._table is None:
-            with File(self.hydro_path, 'r') as hfile:
-                Ye = np.array(hfile['ye'])
-                ltemp = np.log10(np.array(hfile['temperature']))
-                lrho = np.log10(np.array(hfile['density']) * RUnits['Rho'])
-                if len(Ye) > 1:
-                    iye = 1/(Ye[1]-Ye[0])
-                else:
-                    iye = np.nan
-                if len(ltemp) > 1:
-                    iltemp = 1/(ltemp[1]-ltemp[0])
-                else:
-                    iltemp = np.nan
-                if len(lrho) > 1:
-                    ilrho = 1/(lrho[1]-lrho[0])
-                else:
-                    ilrho = np.nan
-                self._table = [np.array([Ye[0], ltemp[0], lrho[0]]),
-                               np.array([iye, iltemp, ilrho])]
+            Ye = self.get_key(self.ye_key)
+            ltemp = np.log10(self.get_key(self.temp_key))
+            lrho = np.log10(self.get_key(self.rho_key))
+
+            if len(Ye) > 1:
+                iye = 1/(Ye[1]-Ye[0])
+            else:
+                iye = np.nan
+            if len(ltemp) > 1:
+                iltemp = 1/(ltemp[1]-ltemp[0])
+            else:
+                iltemp = np.nan
+            if len(lrho) > 1:
+                ilrho = 1/(lrho[1]-lrho[0])
+            else:
+                ilrho = np.nan
+            self._table = [np.array([Ye[0], ltemp[0], lrho[0]]),
+                           np.array([iye, iltemp, ilrho])]
         return self._table
-
-    def get_key(self, key):
-        self._check_initialized()
-        self._get_keys([key])
-        return self.data[key]
-
-    def get_inf_caller(self,
-                       keys: List[str],
-                       func: Callable = lambda *args: args[0]
-                       ) -> Callable:
-        def eos_caller_inf(ye: 'NDArray[np.float_]',
-                           *_, **kw) -> 'NDArray[np.float_]':
-
-            nonlocal keys
-            nonlocal func
-
-            self._get_keys(keys)
-            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
-
-            shape = ye.shape
-            fshape = (np.prod(shape), )
-
-            ye = ye.flatten()
-            mask = np.isfinite(ye)
-            ye = ye[mask]
-
-            data = np.array([self.data[kk][:, 0, 0] for kk in keys
-                             if kk not in scalars])
-            islog = np.array([np.all(dd > 0) for dd in data])
-            data[islog] = np.log10(data[islog])
-
-            res = ui.linterp1D(ye,
-                               self.table[0][0],
-                               self.table[1][0],
-                               data)
-
-            args = []
-            i_int = 0
-            for kk in keys:
-                if kk in scalars:
-                    tmp = self.data[kk]
-                else:
-                    tmp = np.zeros(fshape)*np.nan
-                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
-                    tmp = np.reshape(tmp, shape)
-                    i_int += 1
-                args.append(tmp)
-
-            return func(*args, ye, **kw)
-
-        return eos_caller_inf
-
-    def get_cold_caller(self,
-                        keys: List[str],
-                        func: Callable = lambda *args: args[0]
-                        ) -> Callable:
-        def eos_caller_cold(ye: 'NDArray[np.float_]',
-                            rho: 'NDArray[np.float_]',
-                            *_, **kw) -> 'NDArray[np.float_]':
-
-            nonlocal keys
-            nonlocal func
-
-            self._get_keys(keys)
-            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
-
-            shape = ye.shape
-            fshape = (np.prod(shape), )
-
-            args = [ye.flatten(), np.log10(rho).flatten()]
-            mask = reduce(np.logical_and, [np.isfinite(arg) for arg in args])
-            args = [arg[mask] for arg in args]
-
-            data = np.array([self.data[kk][:, 0] for kk in keys
-                             if kk not in scalars])
-            islog = np.array([np.all(dd > 0) for dd in data])
-            data[islog] = np.log10(data[islog])
-
-            res = ui.linterp2D(*args,
-                               self.table[0][[0, 2]],
-                               self.table[1][[0, 2]],
-                               data)
-            args = []
-            i_int = 0
-            for kk in keys:
-                if kk in scalars:
-                    tmp = self.data[kk]
-                else:
-                    tmp = np.zeros(fshape)*np.nan
-                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
-                    tmp = np.reshape(tmp, shape)
-                    i_int += 1
-                args.append(tmp)
-
-            return func(*args, rho, ye, **kw)
-
-        return eos_caller_cold
-
-    def get_weak_eq_caller(self,
-                           keys: List[str],
-                           func: Callable = lambda *args: args[0]
-                           ) -> Callable:
-        def eos_caller(temp: 'NDArray[np.float_]',
-                       rho: 'NDArray[np.float_]',
-                       *_, **kw) -> 'NDArray[np.float_]':
-
-            nonlocal keys
-            nonlocal func
-
-            self._get_keys(keys)
-            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
-
-            shape = rho.shape
-            fshape = (np.prod(shape), )
-
-            args = [np.log10(temp).flatten(),
-                    np.log10(rho).flatten()]
-            mask = reduce(np.logical_and, [np.isfinite(arg) for arg in args])
-            args = [arg[mask] for arg in args]
-
-            data = np.array([self.data[kk] for kk in keys])
-            islog = np.array([np.all(dd > 0) for dd in data])
-            data[islog] = np.log10(data[islog])
-
-            res = ui.linterp3D(*args, *self.table, data)
-
-            func_args = []
-            i_int = 0
-            for kk in keys:
-                if kk in scalars:
-                    tmp = self.data[kk]
-                else:
-                    tmp = np.zeros(fshape)*np.nan
-                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
-                    tmp = np.reshape(tmp, shape)
-                    i_int += 1
-                func_args.append(tmp)
-
-            return func(*func_args, rho, temp, **kw)
-
-        return eos_caller
 
     def get_caller(self,
                    keys: List[str],
-                   func: Callable = lambda *args: args[0]
+                   func: Callable = lambda *args, **_: args[0]
                    ) -> Callable:
         def eos_caller(ye: 'NDArray[np.float_]',
                        temp: 'NDArray[np.float_]',
@@ -327,47 +165,228 @@ class TabulatedEOS(EOS):
                     i_int += 1
                 args.append(tmp)
 
-            return func(*args, rho, ye, temp, **kw)
+            return func(*args, rho=rho, ye=ye, temp=temp, **kw)
 
         return eos_caller
 
-    def get_mbary50(self,) -> float:
+    def get_cold_caller(self,
+                        keys: List[str],
+                        func: Callable = lambda *args, **_: args[0]
+                        ) -> Callable:
+        def eos_caller_cold(ye: 'NDArray[np.float_]',
+                            rho: 'NDArray[np.float_]',
+                            *_, **kw) -> 'NDArray[np.float_]':
+
+            nonlocal keys
+            nonlocal func
+
+            self._get_keys(keys)
+            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
+
+            shape = ye.shape
+            fshape = (np.prod(shape), )
+
+            args = [ye.flatten(), np.log10(rho).flatten()]
+            mask = reduce(np.logical_and, [np.isfinite(arg) for arg in args])
+            args = [arg[mask] for arg in args]
+
+            data = np.array([self.data[kk][:, 0] for kk in keys
+                             if kk not in scalars])
+            islog = np.array([np.all(dd > 0) for dd in data])
+            data[islog] = np.log10(data[islog])
+
+            res = ui.linterp2D(*args,
+                               self.table[0][[0, 2]],
+                               self.table[1][[0, 2]],
+                               data)
+            args = []
+            i_int = 0
+            for kk in keys:
+                if kk in scalars:
+                    tmp = self.data[kk]
+                else:
+                    tmp = np.zeros(fshape)*np.nan
+                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
+                    tmp = np.reshape(tmp, shape)
+                    i_int += 1
+                args.append(tmp)
+
+            return func(*args, rho=rho, ye=ye, **kw)
+
+        return eos_caller_cold
+
+    def get_inf_caller(self,
+                       keys: List[str],
+                       func: Callable = lambda *args, **_: args[0]
+                       ) -> Callable:
+        def eos_caller_inf(ye: 'NDArray[np.float_]',
+                           *_, **kw) -> 'NDArray[np.float_]':
+
+            nonlocal keys
+            nonlocal func
+
+            self._get_keys(keys)
+            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
+
+            shape = ye.shape
+            fshape = (np.prod(shape), )
+
+            ye = ye.flatten()
+            mask = np.isfinite(ye)
+            ye = ye[mask]
+
+            data = np.array([self.data[kk][:, 0, 0] for kk in keys
+                            if kk not in scalars])
+            islog = np.array([np.all(dd > 0) for dd in data])
+            data[islog] = np.log10(data[islog])
+
+            res = ui.linterp1D(ye,
+                               self.table[0][0],
+                               self.table[1][0],
+                               data)
+
+            args = []
+            i_int = 0
+            for kk in keys:
+                if kk in scalars:
+                    tmp = self.data[kk]
+                else:
+                    tmp = np.zeros(fshape)*np.nan
+                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
+                    tmp = np.reshape(tmp, shape)
+                    i_int += 1
+                args.append(tmp)
+
+            return func(*args, ye=ye, **kw)
+
+        return eos_caller_inf
+
+    def get_weak_eq_caller(self,
+                           keys: List[str],
+                           func: Callable = lambda *args, **_: args[0]
+                           ) -> Callable:
+        def eos_caller(temp: 'NDArray[np.float_]',
+                       rho: 'NDArray[np.float_]',
+                       *_, **kw) -> 'NDArray[np.float_]':
+
+            nonlocal keys
+            nonlocal func
+
+            self._get_keys(keys)
+            scalars = [kk for kk in keys if np.isscalar(self.data[kk])]
+
+            shape = rho.shape
+            fshape = (np.prod(shape), )
+
+            args = [np.log10(temp).flatten(),
+                    np.log10(rho).flatten()]
+            mask = reduce(np.logical_and, [np.isfinite(arg) for arg in args])
+            args = [arg[mask] for arg in args]
+
+            data = np.array([self.data[kk] for kk in keys])
+            islog = np.array([np.all(dd > 0) for dd in data])
+            data[islog] = np.log10(data[islog])
+
+            res = ui.linterp3D(*args, *self.table, data)
+
+            func_args = []
+            i_int = 0
+            for kk in keys:
+                if kk in scalars:
+                    tmp = self.data[kk]
+                else:
+                    tmp = np.zeros(fshape)*np.nan
+                    tmp[mask] = 10**res[i_int] if islog[i_int] else res[i_int]
+                    tmp = np.reshape(tmp, shape)
+                    i_int += 1
+                func_args.append(tmp)
+
+            return func(*func_args, rho=rho, temp=temp, **kw)
+
+        return eos_caller
+
+    def _check_initialized(self):
+        if self.name == 'Unitilialized':
+            raise ValueError(F"Path to {self.__class__.__name__} file not given. "
+                             F"Run {self.__class__.__name__}.set_path('path/to/eos/')")
+
+    @property
+    def ye_range(self) -> Tuple[np.float_, np.float_]:
         self._check_initialized()
-        if self._mass_fac is None:
-            with File(self.hydro_path, 'r') as hfile:
-                self._mass_fac = hfile['mass_factor'][()]
-        mev_50_msol = 8.962964431087716e-11
-        return self._mass_fac*mev_50_msol
+        if self._ye_range is None:
+            Ye = self.get_key(self.ye_key)
+            self._ye_range = (Ye[0], Ye[-1])
+        return self._ye_range
+
+    @property
+    def temp_range(self) -> Tuple[np.float_, np.float_]:
+        self._check_initialized()
+        if self._temp_range is None:
+            Temp = self.get_key(self.temp_key)
+            self._temp_range = (Temp[0], Temp[-1])
+        return self._temp_range
+
+    @property
+    def rho_range(self) -> Tuple[np.float_, np.float_]:
+        self._check_initialized()
+        if self._rho_range is None:
+            Rho = self.get_key(self.rho_key)
+            self._rho_range = (Rho[0], Rho[-1])
+        return self._rho_range
 
     def _get_keys(self, keys: List[str]):
         self._check_initialized()
 
         new_keys = [kk for kk in keys if kk not in self.data]
 
-        _scale = dict(
-            pressure=RUnits["Press"],
-            only_P=RUnits["Press"],
-            internalEnergy=RUnits["Eps"],
-            only_E=RUnits["Eps"],
-            density=RUnits["Rho"],
-        )
-
         if len(new_keys) > 0:
             for kk in new_keys:
-                for path in [self.hydro_path, self.weak_path]:
-                    with File(path, 'r') as hfile:
-                        if kk in hfile:
-                            self.data[kk] = hfile[kk][()]
-                            if kk in _scale:
-                                self.data[kk] *= _scale[kk]
-                            break
-                else:
-                    raise KeyError(f"{kk} not found in EOS tables in {self}")
+                self.data[kk] = self.get_key(kk)
 
-    def _check_initialized(self):
-        if self.name == 'Unitilialized':
-            raise ValueError("Path to EOS file not given. "
-                             "Run Simulation.eos.set_path('path/to/eos/')")
+    def __call__(
+        self,
+        key: str,
+        ye: "ArrayLike",
+        temp: "ArrayLike",
+        rho: "ArrayLike",
+    ) -> "NDArray[np.float_]":
+        if np.isscalar(ye):
+            ye = np.array([ye])
+            temp = np.array([temp])
+            rho = np.array([rho])
+            scalar = True
+        else:
+            ye = np.asarray(ye)
+            temp = np.asarray(temp)
+            rho = np.asarray(rho)
+            scalar = False
+
+        if ye.shape != temp.shape or ye.shape != rho.shape:
+            raise ValueError("ye, rho, and temp must have the same shape")
+
+        if scalar:
+            return self.get_caller([key])(ye, temp, rho)[0]
+        return self.get_caller([key])(ye, temp, rho)
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__} with name {self.name}"
+
+
+class PizzaEOS(TabulatedEOS):
+    """Realistic Tabluated EOS """
+    hydro_path: Optional[str]
+    weak_path: Optional[str]
+
+    def __post_init__(self):
+        self.ye_key = "ye"
+        self.temp_key = "temperature"
+        self.rho_key = "density"
+
+        # mass factor in MeV
+        self._mass_fac: Optional[float] = None
 
     def set_path(self, path: Optional[str]):
         "EOS path setter"
@@ -384,3 +403,37 @@ class TabulatedEOS(EOS):
         self.hydro_path = f"{path}/hydro.h5"
         self.weak_path = f"{path}/weak.h5"
         self.name = path.split('/')[-1]
+
+    def get_key(self, key):
+        """Get key from hydro or weak file"""
+        if key in self.data:
+            return self.data[key]
+
+        self._check_initialized()
+
+        scale = dict(
+            rho=RUnits['Rho'],
+            pressure=RUnits["Press"],
+            only_P=RUnits["Press"],
+            internalEnergy=RUnits["Eps"],
+            only_E=RUnits["Eps"],
+            density=RUnits["Rho"],
+        )
+
+        for path in [self.hydro_path, self.weak_path]:
+            with File(path, 'r') as hfile:
+                if key in hfile:
+                    self.data[key] = np.array(hfile[key])
+                    if key in scale:
+                        self.data[key] *= scale[key]
+                    break
+        else:
+            raise KeyError(f"{key} not found in EOS tables in {self}")
+        return self.data[key]
+
+    def get_mbary50(self,) -> float:
+        self._check_initialized()
+        with File(self.hydro_path, 'r') as hfile:
+            mass_fac = hfile['mass_factor'][()]
+        mev_50_msol = 8.962964431087716e-11
+        return mass_fac*mev_50_msol
