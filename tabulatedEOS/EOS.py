@@ -96,28 +96,36 @@ class TabulatedEOS(ABC):
         if data_slice is None:
             data_slice = {}
 
-        def eos_caller(**kwargs: 'NDArray[np.float_]') -> 'NDArray[np.float_]':
+        def eos_caller(
+            *args: 'NDArray[np.float_]',
+            **kwargs: 'NDArray[np.float_]',
+        ) -> 'NDArray[np.float_]':
 
             nonlocal arguments
             nonlocal data_slice
             nonlocal keys
             nonlocal func
 
+            kwargs = self._convert_args_to_kwargs(args, kwargs, arguments)
             inputs, kwargs = self._separate_inputs(kwargs, arguments)
             inputs, shape = self._check_inputs(inputs)
 
-            args, finite_mask = self._prepare_args(inputs)
+            inps, finite_mask = self._prepare_inputs(inputs)
             offsets, inv_steps = self._prepare_table(arguments)
-            data, islog = self._prepare_data(keys, data_slice)
 
-            if len(args) == 1:
-                result = ui.linterp1D(args[0], offsets, inv_steps, data)
-            elif len(args) == 2:
+            data = self._slice_data(keys, data_slice)
+            data, islog = self._logspace_data(data)
+
+            if len(inps) == 1:
+                offsets = np.float64(offsets)
+                inv_steps = np.float64(inv_steps)
+                result = ui.linterp1D(inps[0], offsets, inv_steps, data)
+            elif len(inps) == 2:
                 result = ui.linterp2D(
-                    args[0], args[1], offsets, inv_steps, data)
-            elif len(args) == 3:
+                    inps[0], inps[1], offsets, inv_steps, data)
+            elif len(inps) == 3:
                 result = ui.linterp3D(
-                    args[0], args[1], args[2], offsets, inv_steps, data)
+                    inps[0], inps[1], inps[2], offsets, inv_steps, data)
             else:
                 raise ValueError("Too many arguments")
 
@@ -129,7 +137,7 @@ class TabulatedEOS(ABC):
 
     def get_caller(self, keys: list[str], func: Optional[Callable] = None,) -> Callable:
         return self._get_caller(
-            arguments=['ye', 'rho', 'temp'],
+            arguments=['ye', 'temp', 'rho'],
             keys=keys,
             func=func
         )
@@ -145,7 +153,7 @@ class TabulatedEOS(ABC):
     def get_inf_caller(self, keys: list[str], func: Optional[Callable] = None,) -> Callable:
         return self._get_caller(
             arguments=['ye'],
-            data_slice={"rho": 0, "temp": 0},
+            data_slice={"temp": 0, "rho": 0},
             keys=keys,
             func=func
         )
@@ -196,6 +204,9 @@ class TabulatedEOS(ABC):
         rho = np.asarray(rho)
         return self.get_caller([key])(ye=ye, temp=temp, rho=rho)
 
+    def __getitem__(self, key: str) -> "NDArray[np.float_]":
+        return self.get_key(key)
+
     def __str__(self) -> str:
         return self.name
 
@@ -215,14 +226,16 @@ class TabulatedEOS(ABC):
                 if name == key:
                     clipped = np.clip(inp, *val_range)
                     if np.any(clipped != inp):
-                        warn(f"{name} ouside of EOS range")
+                        outliers = inp[clipped != inp]
+                        warn(
+                            f"{name} = {outliers} out of range {val_range} of EOS {self.name}")
                     clipped_inputs[name] = clipped
                     break
             else:
                 raise ValueError(f"Invalid argument {name}")
         return clipped_inputs, inp_shape
 
-    def _prepare_args(
+    def _prepare_inputs(
         self,
         inputs: dict[str, "NDArray[np.float_]"],
     ) -> tuple[list["NDArray[np.float_]"], "Mask"]:
@@ -247,23 +260,46 @@ class TabulatedEOS(ABC):
         inv_steps = np.array([self._inv_steps[name] for name in arguments])
         return offsets, inv_steps
 
-    def _prepare_data(
+    def _slice_data(
         self,
         keys: list[str],
         data_slice: dict[str, int],
-    ) -> tuple["NDArray[np.float_]", "Mask"]:
+    ) -> "NDArray[np.float_]":
+
+        data_slice = dict(sorted(data_slice.items(), key=lambda it: it[1]))
 
         def slice_data(data):
-            for ii, tk in enumerate(self.table_keys):
+            for ii, tk in list(enumerate(self.table_keys))[::-1]:
                 if tk in data_slice:
                     data = data.take(data_slice[tk], axis=ii)
             return data
 
         data = np.array([slice_data(self.get_key(kk)) for kk in keys])
+        return data
 
+    def _logspace_data(
+        self,
+        data: "NDArray[np.float_]",
+    ) -> tuple["NDArray[np.float_]", "Mask"]:
         islog = np.array([np.all(dd > 0) for dd in data])
         data[islog] = np.log10(data[islog])
         return data, islog
+
+    @staticmethod
+    def _convert_args_to_kwargs(
+        args: tuple["NDArray[np.float_]", ...],
+        kwargs: dict[str, Any],
+        arguments: list[str],
+    ) -> dict[str, "NDArray[np.float_]"]:
+        kwargs = kwargs.copy()
+        args_list = list(args)
+        for argument in arguments:
+            if argument in kwargs:
+                continue
+            kwargs[argument] = args_list.pop(0)
+        if args_list:
+            raise ValueError("Too many arguments")
+        return kwargs
 
     @staticmethod
     def _separate_inputs(

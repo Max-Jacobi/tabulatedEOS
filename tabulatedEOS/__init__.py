@@ -1,1 +1,1 @@
-from .EOS import *
+from .EOS import TabulatedEOS

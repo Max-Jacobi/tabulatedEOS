@@ -62,6 +62,15 @@ class PizzaEOS(TabulatedEOS):
             raise KeyError(f"{key} not found in EOS tables in {self}")
         return data
 
+    def keys(self):
+        """returns the keys in the hydro.h5 file"""
+        self._check_initialized()
+        with File(self.hydro_path, 'r') as hfile:
+            keys = list(hfile.keys())
+        with File(self.weak_path, 'r') as hfile:
+            keys.extend(list(hfile.keys()))
+        return keys
+
     @cached_property
     def mbary50(self,) -> float:
         mass_fac = float(self.get_key("mass_fac"))
