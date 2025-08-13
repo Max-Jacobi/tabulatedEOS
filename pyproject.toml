@@ -1,0 +1,23 @@
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracers"
+version = "0.1.0"
+description="Routines to interpolate inside tabulated EOS tables given in the ET format"
+readme = { file = "README.org", content-type = "text/x-org" }
+requires-python = ">=3.10"
+license = { text = "GPLv3" }
+authors = [
+  { name = "Max Jacobi" },
+]
+dependencies = [
+  "numpy",
+  "h5py",
+  "alpyne @ git+https://github.com/fguercilena/alpyne@master",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

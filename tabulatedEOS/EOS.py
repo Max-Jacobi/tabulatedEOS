@@ -4,7 +4,6 @@ from functools import reduce, cached_property
 from warnings import warn
 import numpy as np
 import alpyne.uniform_interpolation as ui  # type: ignore
-from icecream import ic
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray, ArrayLike
