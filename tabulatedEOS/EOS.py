@@ -84,7 +84,7 @@ class TabulatedEOS(ABC):
         ...
 
     @abstractmethod
-    def get_key(self, key: str) -> Array1D | Array3D:
+    def get_key(self, key: str) -> "Array1D | Array3D":
         """
         Returns the raw data for the given key.
         This will be wrapped by functools.lru_cache to speed up interpolation.
@@ -100,7 +100,7 @@ class TabulatedEOS(ABC):
         return self.conversions[key](self.eos_units, self.code_units)
 
     @lru_cache
-    def get_key_with_units(self, key: str) -> Array1D | Array3D:
+    def get_key_with_units(self, key: str) -> "Array1D | Array3D":
         """
         Returns the data for the given key with unit conversion.
         """
@@ -265,7 +265,7 @@ class TabulatedEOS(ABC):
             return self.get_caller([key])(ye=ye, temp=temp, rho=rho)[0]
         return self.get_caller([key])(ye=ye, temp=temp, rho=rho)
 
-    def __getitem__(self, key: str) -> Array1D | Array3D:
+    def __getitem__(self, key: str) -> "Array1D | Array3D":
         return self.get_key_with_units(key)
 
     def __str__(self) -> str:
