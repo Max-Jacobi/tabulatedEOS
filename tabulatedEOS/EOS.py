@@ -1,16 +1,25 @@
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, TYPE_CHECKING, Any, overload
-from functools import reduce, cached_property
+from typing import Callable, Optional, TYPE_CHECKING, Any
+from functools import reduce, cached_property, lru_cache
 from warnings import warn
 import numpy as np
+from scipy.optimize import toms748
 import alpyne.uniform_interpolation as ui  # type: ignore
 
-if TYPE_CHECKING:
-    from numpy.typing import NDArray, ArrayLike
-    Mask = NDArray[np.bool_]
+from .unit_system import unit_systems, UnitSystem
 
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+    Mask = np.ndarray[tuple[int, ...], np.dtype[np.bool]]
+    Array1D = np.ndarray[tuple[int], np.dtype[np.float64]]
+    Array3D = np.ndarray[tuple[int, int, int], np.dtype[np.float64]]
+
+
+def _return_first(*args, **_):
+    return args[0]
 
 class TabulatedEOS(ABC):
+    eos_units: UnitSystem
     """
     EOS abstract base class for interpolation in tabulated equation of state tables.False
     To define a new format the following functions have to be set:
@@ -22,6 +31,11 @@ class TabulatedEOS(ABC):
                 The order has to be the the same in which they are needed for interpolation
           - self.name: str
               should be set to something different than "Unitilialized"
+          - self.eos_units: UnitSyste,
+              one of the unit systems defined in tabulatedEOS.unit_systems
+          - self.conversions: dict[str, Callable]
+              links key to unit conversion functions to be used
+
           - should also initialize variables based on path that will be used by get_keys
     get_key:
         This function should return the data for the given key.
@@ -31,15 +45,23 @@ class TabulatedEOS(ABC):
     table_keys: dict[str, str]
     log_names: list[str] = ['rho', 'temp']
 
-    def __init__(self, path: Optional[str] = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        code_units: str = "CGS",
+        **kwargs):
 
         self.name = "Unitilialized"
+        self.conversions: dict[str, Callable[[UnitSystem, UnitSystem], float]] = {}
+        self.code_units = unit_systems[code_units]
         if path is None:
             return
         self.post_init(path, **kwargs)
 
         if not hasattr(self, "table_keys"):
             raise ValueError("post_init has to initialize self.table_keys")
+        if not hasattr(self, "eos_units"):
+            raise ValueError("post_init has to initialize self.eos_units")
         if self.name == "Unitilialized":
             raise ValueError("post_init has to initialize self.name")
 
@@ -56,24 +78,86 @@ class TabulatedEOS(ABC):
           - self.name: str
               should be set to something different than "Unitilialized"
 
-        Should also initialize the variables to needed by get_key based on input path and other keyword arguments.
+        Should also initialize the variables needed by get_key
+        based on input path and other keyword arguments.
         """
         ...
 
     @abstractmethod
-    def get_key(self, key: str) -> "NDArray[np.float_]":
+    def get_key(self, key: str) -> Array1D | Array3D:
         """
-        Returns the data for the given key.
+        Returns the raw data for the given key.
         This will be wrapped by functools.lru_cache to speed up interpolation.
         """
         ...
+
+    def unit_conversion(self, key: str) -> float:
+        """
+        Returns the conversion factor from eos_units to code_units for a given key
+        """
+        if key not in self.conversions:
+            return 1.0
+        return self.conversions[key](self.eos_units, self.code_units)
+
+    @lru_cache
+    def get_key_with_units(self, key: str) -> Array1D | Array3D:
+        """
+        Returns the data for the given key with unit conversion.
+        """
+        return self.get_key(key) * self.unit_conversion(key)
+
+    def inverse_call(
+        self,
+        func: Callable[..., float | np.ndarray] = _return_first,
+        **kwargs: float | np.ndarray,
+    ) -> float | np.ndarray:
+        # Pick which of ['ye', 'temp', 'rho'] is the unknown and which "field" feeds func
+        field_keys = []
+        fields = []
+        for k in kwargs:
+            if k not in ['ye', 'temp', 'rho']:
+                field_keys.append(k)
+                fields.append(kwargs.pop(k))
+                break
+        else:
+            raise ValueError("Need at least one non-state field for func.")
+
+        for k in ['ye', 'temp', 'rho']:
+            if k not in kwargs:
+                target_key = k
+                break
+        else:
+            raise ValueError("Exactly one of ['ye','temp','rho'] must be missing.")
+
+        caller = self.get_caller(field_keys, func=func)
+
+        # Vectorized residual: targ may be scalar or array; caller must return array
+        def f_vec(targ):
+            kw = {k: np.atleast_1d(v) for k, v in {**kwargs, **{target_key: targ}}.items()}
+            # caller(**kw) returns an array; func(*fields) is scalar here
+            return caller(**kw) - func(*fields)
+
+        # If everything is scalar, just fall back to toms748 for single solve
+        if all(np.ndim(v) == 0 for v in kwargs.values()):
+            def f_scalar(t):
+                return f_vec(t).ravel()[0]
+            a, b = self.range[target_key]
+            return toms748(f_scalar, a, b)
+
+        # Otherwise do a batched bracketed solve using vectorized bisection
+        a, b = self.range[target_key]
+        a = np.full_like(fields[0], a)
+        b = np.full_like(fields[0], b)
+        roots = batched_bisection(f_vec, a, b, xtol=1e-8, maxiter=128)
+        return roots
+
 
     def _read_table(self) -> None:
         self._offsets = {}
         self._inv_steps = {}
 
         for name, key in self.table_keys.items():
-            dat = self.get_key(key)
+            dat = self.get_key_with_units(key)
             if name in self.log_names:
                 dat = np.log10(dat)
             self._offsets[name] = dat[0]
@@ -85,20 +169,15 @@ class TabulatedEOS(ABC):
     def _get_caller(self,
                     arguments: list[str],
                     keys: list[str],
-                    data_slice: Optional[dict[str, int]] = None,
-                    func: Optional[Callable] = None,
+                    data_slice: dict[str, int] = {},
+                    func: Callable = _return_first,
                     ) -> Callable:
         self._check_initialized()
 
-        if func is None:
-            func = lambda *args, **_: args[0]
-        if data_slice is None:
-            data_slice = {}
-
         def eos_caller(
-            *args: 'NDArray[np.float_]',
-            **kwargs: 'NDArray[np.float_]',
-        ) -> 'NDArray[np.float_]':
+            *args: np.ndarray,
+            **kwargs: np.ndarray,
+        ) -> np.ndarray:
 
             nonlocal arguments
             nonlocal data_slice
@@ -134,14 +213,14 @@ class TabulatedEOS(ABC):
 
         return eos_caller
 
-    def get_caller(self, keys: list[str], func: Optional[Callable] = None,) -> Callable:
+    def get_caller(self, keys: list[str], func: Callable = _return_first,) -> Callable:
         return self._get_caller(
             arguments=['ye', 'temp', 'rho'],
             keys=keys,
             func=func
         )
 
-    def get_cold_caller(self, keys: list[str], func: Optional[Callable] = None,) -> Callable:
+    def get_cold_caller(self, keys: list[str], func: Callable = _return_first,) -> Callable:
         return self._get_caller(
             arguments=['ye', 'rho'],
             data_slice={'temp': 0},
@@ -149,7 +228,7 @@ class TabulatedEOS(ABC):
             func=func
         )
 
-    def get_inf_caller(self, keys: list[str], func: Optional[Callable] = None,) -> Callable:
+    def get_inf_caller(self, keys: list[str], func: Callable = _return_first,) -> Callable:
         return self._get_caller(
             arguments=['ye'],
             data_slice={"temp": 0, "rho": 0},
@@ -167,44 +246,27 @@ class TabulatedEOS(ABC):
         self._check_initialized()
         table_range = {}
         for name, key in self.table_keys.items():
-            dat = self.get_key(key)
+            dat = self.get_key_with_units(key)
             table_range[name] = (dat[0], dat[-1])
         return table_range
 
-    @overload
     def __call__(
         self,
         key: str,
         ye: 'ArrayLike',
         temp: 'ArrayLike',
         rho: 'ArrayLike',
-    ) -> "NDArray[np.float_]":
-        ...
-
-    @overload
-    def __call__(
-        self,
-        key: str,
-        ye: float,
-        temp: float,
-        rho: float,
-    ) -> float:
-        ...
-
-    def __call__(self, key, ye, temp, rho):
-        if np.isscalar(ye):
-            ye = np.array([ye])
-            temp = np.array([temp])
-            rho = np.array([rho])
+    ) -> 'ArrayLike':
+        is_scalar = np.isscalar(ye)
+        ye = np.atleast_1d(ye)
+        temp = np.atleast_1d(temp)
+        rho = np.atleast_1d(rho)
+        if is_scalar:
             return self.get_caller([key])(ye=ye, temp=temp, rho=rho)[0]
-
-        ye = np.asarray(ye)
-        temp = np.asarray(temp)
-        rho = np.asarray(rho)
         return self.get_caller([key])(ye=ye, temp=temp, rho=rho)
 
-    def __getitem__(self, key: str) -> "NDArray[np.float_]":
-        return self.get_key(key)
+    def __getitem__(self, key: str) -> Array1D | Array3D:
+        return self.get_key_with_units(key)
 
     def __str__(self) -> str:
         return self.name
@@ -236,8 +298,8 @@ class TabulatedEOS(ABC):
 
     def _prepare_inputs(
         self,
-        inputs: dict[str, "NDArray[np.float_]"],
-    ) -> tuple[list["NDArray[np.float_]"], "Mask"]:
+        inputs: dict[str, np.ndarray],
+    ) -> tuple[list[np.ndarray], "Mask"]:
         c_inputs = inputs.copy()
         for name in inputs:
             if name in self.log_names:
@@ -255,15 +317,15 @@ class TabulatedEOS(ABC):
         return args, finite_mask
 
     def _prepare_table(self, arguments: list[str]):
-        offsets = np.array([self._offsets[name] for name in arguments])
-        inv_steps = np.array([self._inv_steps[name] for name in arguments])
+        offsets = np.array([self._offsets[name] for name in self.table_keys if name in arguments])
+        inv_steps = np.array([self._inv_steps[name] for name in self.table_keys if name in arguments])
         return offsets, inv_steps
 
     def _slice_data(
         self,
         keys: list[str],
         data_slice: dict[str, int],
-    ) -> "NDArray[np.float_]":
+    ) -> np.ndarray:
 
         data_slice = dict(sorted(data_slice.items(), key=lambda it: it[1]))
 
@@ -273,23 +335,23 @@ class TabulatedEOS(ABC):
                     data = data.take(data_slice[tk], axis=ii)
             return data
 
-        data = np.array([slice_data(self.get_key(kk)) for kk in keys])
+        data = np.array([slice_data(self.get_key_with_units(kk)) for kk in keys])
         return data
 
     def _logspace_data(
         self,
-        data: "NDArray[np.float_]",
-    ) -> tuple["NDArray[np.float_]", "Mask"]:
+        data: np.ndarray,
+    ) -> tuple[np.ndarray, "Mask"]:
         islog = np.array([np.all(dd > 0) for dd in data])
         data[islog] = np.log10(data[islog])
         return data, islog
 
     @staticmethod
     def _convert_args_to_kwargs(
-        args: tuple["NDArray[np.float_]", ...],
+        args: tuple[np.ndarray, ...],
         kwargs: dict[str, Any],
         arguments: list[str],
-    ) -> dict[str, "NDArray[np.float_]"]:
+    ) -> dict[str, np.ndarray]:
         kwargs = kwargs.copy()
         args_list = list(args)
         for argument in arguments:
@@ -304,7 +366,7 @@ class TabulatedEOS(ABC):
     def _separate_inputs(
         kwargs: dict[str, Any],
         arguments: list[str],
-    ) -> tuple[dict[str, "NDArray[np.float_]"], dict[str, Any]]:
+    ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         inputs = {key: kwargs.pop(key)
                   for key in arguments
                   if key in kwargs}
@@ -313,11 +375,11 @@ class TabulatedEOS(ABC):
 
     @staticmethod
     def _reshape_result(
-        result: "NDArray[np.float_]",
+        result: np.ndarray,
         shape: tuple[int, ...],
         finite_mask: "Mask",
         islog: "Mask",
-    ) -> list["NDArray[np.float_]"]:
+    ) -> list[np.ndarray]:
         reshaped = []
         for log, res in zip(islog, result):
             tmp = np.zeros(shape)*np.nan
@@ -327,3 +389,52 @@ class TabulatedEOS(ABC):
                 tmp[finite_mask] = res
             reshaped.append(tmp)
         return reshaped
+
+
+def batched_bisection(eval_f, a, b, *, xtol=1e-8, maxiter=100):
+    """
+    Vectorized bisection on many targets at once.
+
+    Parameters
+    ----------
+    eval_f : callable
+        f(t) -> array. Must be vectorized over t (broadcast OK).
+        Should satisfy f(a)*f(b) <= 0 elementwise.
+    a, b : float or array-like
+        Lower/upper bounds; will be broadcast to the common shape.
+    xtol : float
+        Stop when max(b - a) < xtol.
+    maxiter : int
+        Safety cap on iterations.
+
+    Returns
+    -------
+    t : ndarray
+        Approximate roots with the broadcast shape of a and b.
+    """
+    lo = np.broadcast_to(np.asarray(a, dtype=float), np.broadcast(np.asarray(a), np.asarray(b)).shape).copy()
+    hi = np.broadcast_to(np.asarray(b, dtype=float), lo.shape).copy()
+
+    f_lo = eval_f(lo)
+    f_hi = eval_f(hi)
+
+    bad = f_lo * f_hi > 0
+    if np.any(bad):
+        raise ValueError("Bisection requires sign change on [a,b] per element.")
+
+    for _ in range(maxiter):
+        mid = 0.5 * (lo + hi)
+        f_mid = eval_f(mid)
+
+        left_interval = f_lo * f_mid <= 0  # keep [lo, mid] where sign changes
+        hi = np.where(left_interval, mid, hi)
+        f_hi = np.where(left_interval, f_mid, f_hi)
+
+        right_interval = ~left_interval   # keep [mid, hi] otherwise
+        lo = np.where(right_interval, mid, lo)
+        f_lo = np.where(right_interval, f_mid, f_lo)
+
+        if np.max(hi - lo) < xtol:
+            break
+
+    return 0.5 * (lo + hi)

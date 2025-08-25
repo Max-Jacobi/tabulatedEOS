@@ -4,7 +4,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tracers"
+name = "tabulatedEOS"
 version = "0.1.0"
 description="Routines to interpolate inside tabulated EOS tables given in the ET format"
 readme = { file = "README.org", content-type = "text/x-org" }
