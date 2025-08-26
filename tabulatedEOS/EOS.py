@@ -10,9 +10,12 @@ from .unit_system import unit_systems, UnitSystem
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
-    Mask = np.ndarray[tuple[int, ...], np.dtype[np.bool]]
-    Array1D = np.ndarray[tuple[int], np.dtype[np.float64]]
-    Array3D = np.ndarray[tuple[int, int, int], np.dtype[np.float64]]
+    ND = np.ndarray
+    Mask = ND[tuple[int, ...], np.dtype[np.bool]]
+    Array1D = ND[tuple[int], np.dtype[np.float64]]
+    Array3D = ND[tuple[int, int, int], np.dtype[np.float64]]
+    Scalar = float | np.floating
+
 
 
 def _return_first(*args, **_):
@@ -106,50 +109,129 @@ class TabulatedEOS(ABC):
         """
         return self.get_key(key) * self.unit_conversion(key)
 
-    def inverse_call(
-        self,
-        func: Callable[..., float | np.ndarray] = _return_first,
-        **kwargs: float | np.ndarray,
-    ) -> float | np.ndarray:
-        # Pick which of ['ye', 'temp', 'rho'] is the unknown and which "field" feeds func
-        field_keys = []
-        fields = []
-        for k in kwargs:
-            if k not in ['ye', 'temp', 'rho']:
-                field_keys.append(k)
-                fields.append(kwargs.pop(k))
+
+    def inverse_call(self, **kwargs: "ArrayLike") -> "ND":
+        """
+        Solve for the missing one among {'ye','temp','rho'} so that
+        field_table(ye, temp, rho) == field_value.
+
+        kwargs must include exactly two of {'ye','temp','rho'} and exactly one
+        extra key that names the output field table to invert (e.g. 'pressure').
+        Everything may be scalar or array-like and will be broadcast.
+        """
+
+        axes = tuple(self.table_keys.keys())
+
+        field_key: str | None = None
+        target_val: "ND | None" = None
+
+        kw = dict(kwargs)
+        for k in kw:
+            if k in self.log_names:
+                kw[k] = np.log10(kw[k])
+
+        for k in list(kw.keys()):
+            if k not in axes:
+                field_key = k
+                target_val = np.asarray(kw.pop(k), dtype=float)
                 break
-        else:
-            raise ValueError("Need at least one non-state field for func.")
+        if field_key is None or target_val is None or len(kw) > 2:
+            raise ValueError("Provide exactly one output field key to invert (e.g. 'pressure').")
 
-        for k in ['ye', 'temp', 'rho']:
-            if k not in kwargs:
-                target_key = k
+        missing = [ax for ax in axes if ax not in kw]
+        if len(missing) != 1:
+            raise ValueError("Exactly one of {'ye','temp','rho'} must be missing (the solve target).")
+        target_ax = missing[0]
+        stat_ax = tuple(ax for ax in axes if ax != target_ax)
+
+        g = {ax: self.get_key_with_units(self.table_keys[ax]) for ax in axes}
+        for k in self.log_names:
+            g[k] = np.log10(g[k])
+        T0 = self.get_key_with_units(field_key)
+
+        if np.all(T0 > 0):
+            target_val = np.log10(target_val)
+            T0 = np.log10(T0)
+
+        axis_index = {k: idx for idx, k in enumerate(axes)}
+        A, B, C = stat_ax[0], stat_ax[1], target_ax
+        perm = (axis_index[A], axis_index[B], axis_index[C])
+        T = np.transpose(T0, perm)  # shape: (nA, nB, nC)
+        gC = g[C]                   # 1D grid along target axis
+        nA, nB, nC = T.shape
+
+        def frac_index(val: "ArrayLike", grid: "ND", n: int) -> tuple["ND", "ND", "ND", "ND"]:
+            """Uniform grid: map value -> (lower index, weight in [0,1])."""
+            val = np.asarray(val, dtype=float)
+            dx = grid[1] - grid[0]
+            i_float = (val - grid[0]) / dx
+            i0 = np.floor(i_float).astype(int)
+            i0 = np.clip(i0, 0, n - 2)
+            w = i_float - i0
+            w = np.clip(w, 0.0, 1.0)
+            return i0, i0+1, w, 1-w
+
+        iA0, iA1, wA0, wA1 = frac_index(kw[A], g[A], nA)
+        iB0, iB1, wB0, wB1 = frac_index(kw[B], g[B], nB)
+
+        c00 = wA1 * wB1
+        c01 = wA1 * wB0
+        c10 = wA0 * wB1
+        c11 = wA0 * wB0
+
+        batch_shape = np.broadcast(c00, c01, c10, c11, target_val).shape
+        tv = np.broadcast_to(target_val, batch_shape)
+
+        def val_at_k(k: "ND | int") -> "ND":
+            return (
+                c00 * T[iA0, iB0, k] +
+                c01 * T[iA0, iB1, k] +
+                c10 * T[iA1, iB0, k] +
+                c11 * T[iA1, iB1, k]
+            ) - tv
+
+        lo = np.zeros(batch_shape, dtype=int)
+        hi = np.full(batch_shape, nC - 1, dtype=int)
+        f_lo = val_at_k(lo)
+        f_hi = val_at_k(hi)
+
+        inc = f_hi > f_lo
+
+        bad = f_lo * f_hi > 0
+        if np.any(bad):
+            raise ValueError(
+                f"value out of range along '{C}' for some elements (cannot bracket)."
+            )
+
+        # Batched index bisection: O(log2(nC)) lookups on the target axis only
+        max_iter = int(np.ceil(np.log2(nC))) + 2
+        for _ in range(max_iter):
+            active = (hi - lo) > 1
+            if not np.any(active):
                 break
-        else:
-            raise ValueError("Exactly one of ['ye','temp','rho'] must be missing.")
+            mid = (lo + hi) // 2
+            f_mid = val_at_k(mid)
 
-        caller = self.get_caller(field_keys, func=func)
+            less = f_mid <= 0
+            go_right = np.where(inc, less, ~less) & active
+            go_left  = (~go_right) & active
 
-        # Vectorized residual: targ may be scalar or array; caller must return array
-        def f_vec(targ):
-            kw = {k: np.atleast_1d(v) for k, v in {**kwargs, **{target_key: targ}}.items()}
-            # caller(**kw) returns an array; func(*fields) is scalar here
-            return caller(**kw) - func(*fields)
+            lo = np.where(go_right, mid, lo)
+            f_lo = np.where(go_right, f_mid, f_lo)
 
-        # If everything is scalar, just fall back to toms748 for single solve
-        if all(np.ndim(v) == 0 for v in kwargs.values()):
-            def f_scalar(t):
-                return f_vec(t).ravel()[0]
-            a, b = self.range[target_key]
-            return toms748(f_scalar, a, b)
+            hi = np.where(go_left, mid, hi)
+            f_hi = np.where(go_left, f_mid, f_hi)
 
-        # Otherwise do a batched bracketed solve using vectorized bisection
-        a, b = self.range[target_key]
-        a = np.full_like(fields[0], a)
-        b = np.full_like(fields[0], b)
-        roots = batched_bisection(f_vec, a, b, xtol=1e-8, maxiter=128)
-        return roots
+        x_lo = gC[lo]
+        x_hi = gC[hi]
+        denom = (f_lo - f_hi)
+        t = np.divide(f_lo, denom, out=np.zeros_like(tv, dtype=float), where=denom != 0.0)
+        t = np.clip(t, 0.0, 1.0)  # be safe near flat spots
+        x = x_lo + t * (x_hi - x_lo)
+
+        if C in self.log_names:
+            return 10**x
+        return x
 
 
     def _read_table(self) -> None:
@@ -175,9 +257,9 @@ class TabulatedEOS(ABC):
         self._check_initialized()
 
         def eos_caller(
-            *args: np.ndarray,
-            **kwargs: np.ndarray,
-        ) -> np.ndarray:
+            *args: "ND",
+            **kwargs: "ND",
+        ) -> "ND":
 
             nonlocal arguments
             nonlocal data_slice
@@ -276,8 +358,8 @@ class TabulatedEOS(ABC):
 
     def _check_inputs(
         self,
-        inputs: "dict[str, NDArray[np.float_]]",
-    ) -> tuple["dict[str, NDArray[np.float_]]", tuple[int, ...]]:
+        inputs: "dict[str, ND[np.float_]]",
+    ) -> tuple["dict[str, ND[np.float_]]", tuple[int, ...]]:
         inp_shape = iter(inputs.values()).__next__().shape
         clipped_inputs = {}
         for name, inp in inputs.items():
@@ -298,8 +380,8 @@ class TabulatedEOS(ABC):
 
     def _prepare_inputs(
         self,
-        inputs: dict[str, np.ndarray],
-    ) -> tuple[list[np.ndarray], "Mask"]:
+        inputs: dict[str, "ND"],
+    ) -> tuple[list["ND"], "Mask"]:
         c_inputs = inputs.copy()
         for name in inputs:
             if name in self.log_names:
@@ -325,7 +407,7 @@ class TabulatedEOS(ABC):
         self,
         keys: list[str],
         data_slice: dict[str, int],
-    ) -> np.ndarray:
+    ) -> "ND":
 
         data_slice = dict(sorted(data_slice.items(), key=lambda it: it[1]))
 
@@ -340,18 +422,18 @@ class TabulatedEOS(ABC):
 
     def _logspace_data(
         self,
-        data: np.ndarray,
-    ) -> tuple[np.ndarray, "Mask"]:
+        data: "ND",
+    ) -> tuple["ND", "Mask"]:
         islog = np.array([np.all(dd > 0) for dd in data])
         data[islog] = np.log10(data[islog])
         return data, islog
 
     @staticmethod
     def _convert_args_to_kwargs(
-        args: tuple[np.ndarray, ...],
+        args: tuple["ND", ...],
         kwargs: dict[str, Any],
         arguments: list[str],
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, "ND"]:
         kwargs = kwargs.copy()
         args_list = list(args)
         for argument in arguments:
@@ -366,7 +448,7 @@ class TabulatedEOS(ABC):
     def _separate_inputs(
         kwargs: dict[str, Any],
         arguments: list[str],
-    ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    ) -> tuple[dict[str, "ND"], dict[str, Any]]:
         inputs = {key: kwargs.pop(key)
                   for key in arguments
                   if key in kwargs}
@@ -375,11 +457,11 @@ class TabulatedEOS(ABC):
 
     @staticmethod
     def _reshape_result(
-        result: np.ndarray,
+        result: "ND",
         shape: tuple[int, ...],
         finite_mask: "Mask",
         islog: "Mask",
-    ) -> list[np.ndarray]:
+    ) -> list["ND"]:
         reshaped = []
         for log, res in zip(islog, result):
             tmp = np.zeros(shape)*np.nan
