@@ -11,12 +11,12 @@ readme = { file = "README.org", content-type = "text/x-org" }
 requires-python = ">=3.10"
 license = { text = "GPLv3" }
 authors = [
-  { name = "Max Jacobi" },
+    { name = "Maximilian Jacobi", email = "maximilian.jacobi@uni-jena.de" }
 ]
 dependencies = [
   "numpy",
   "h5py",
-  "alpyne @ git+https://github.com/fguercilena/alpyne@master",
+  "alpyne @ git+https://github.com/fguercilena/alpyne@e2f9261b271e0529c1eb9f63b796c1a02e5b0fbb",
 ]
 
 [tool.setuptools.packages.find]

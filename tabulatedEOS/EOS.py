@@ -3,7 +3,6 @@ from typing import Callable, Optional, TYPE_CHECKING, Any
 from functools import reduce, cached_property, lru_cache
 from warnings import warn
 import numpy as np
-from scipy.optimize import toms748
 import alpyne.uniform_interpolation as ui  # type: ignore
 
 from .unit_system import unit_systems, UnitSystem
