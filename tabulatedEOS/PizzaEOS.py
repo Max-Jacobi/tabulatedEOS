@@ -1,12 +1,16 @@
 import os
 from typing import Optional
+from dataclasses import replace
 from functools import cached_property, lru_cache
 import numpy as np
-from collections import namedtuple
 from h5py import File
 
 from .EOS import TabulatedEOS
+from .unit_system import CGS
+from .unit_system import UnitSystem as US
 
+def _conv_eps(*args: US) -> float:
+    return US.EnergyConversion(*args)/US.MassConversion(*args)
 
 class PizzaEOS(TabulatedEOS):
     """Realistic Tabluated EOS """
@@ -26,6 +30,14 @@ class PizzaEOS(TabulatedEOS):
                            'rho': 'density',
                            }
 
+        self.conversions["rho"] = US.MassDensityConversion
+        self.conversions["density"] = US.MassDensityConversion
+        self.conversions["temp"] = US.TemperatureConversion
+        self.conversions["temperature"] = US.TemperatureConversion
+        self.conversions["internalEnergy"] = _conv_eps
+        self.conversions["entropy"] = US.EntropyConversion
+        self.conversions["pressure"] = US.PressureConversion
+
         # mass factor in MeV
         self._mass_fac: Optional[float] = None
 
@@ -37,6 +49,7 @@ class PizzaEOS(TabulatedEOS):
         self.hydro_path = f"{path}/hydro.h5"
         self.weak_path = f"{path}/weak.h5"
         self.name = path.split('/')[-1]
+        self.eos_units = replace(CGS, temperature=CGS.kb/CGS.MeV, kb=1.0)
 
     @lru_cache(maxsize=10)
     def get_key(self, key):
@@ -44,19 +57,10 @@ class PizzaEOS(TabulatedEOS):
 
         self._check_initialized()
 
-        units = dict(
-            rho=RUnits['Rho'],
-            pressure=RUnits["Press"],
-            internalEnergy=RUnits["Eps"],
-            density=RUnits["Rho"],
-        )
-
         for path in [self.hydro_path, self.weak_path]:
             with File(path, 'r') as hfile:
                 if key in hfile:
                     data = np.array(hfile[key])
-                    if key in units:
-                        data *= units[key]
                     break
         else:
             raise KeyError(f"{key} not found in EOS tables in {self}")
@@ -76,30 +80,3 @@ class PizzaEOS(TabulatedEOS):
         mass_fac = float(self.get_key("mass_fac"))
         mev_50_msol = 8.962964431087716e-11
         return mass_fac*mev_50_msol
-
-
-# Unit conversion from Pizza to geometric units in solar mass
-Units = {
-    "Rho": 6.175828477586656e+17,  # g/cm^3
-    "Eps":  8.9875517873681764e+20,  # erg/g
-    "Press":  5.550725674743868e+38,  # erg/cm^3
-    "Mass": 1.988409870967742e+33,  # g
-    "Energy": 1.7870936689836656e+3,  # 50 erg
-    "Time": 0.004925490948309319,  # ms
-    "Length":  1.4766250382504018,  # km
-}
-RUnits = {
-    "Rho":  1.6192159539877191e-18,
-    "Press":  1.8015662430410847e-39,
-    "Eps":  1.1126500560536184e-21,
-    "Mass":  5.028992139685286e-34,
-    "Energy":  5.595508386114039e-55,
-    "Time":  203.02544670054692,
-    "Length":  0.6772199943086858,
-}
-
-# create a class from the dictionary of units for easy access
-_lower_U = {k.lower(): v for k, v in Units.items()}
-_lower_RU = {k.lower(): v for k, v in RUnits.items()}
-U = namedtuple('Units', _lower_U.keys())(**_lower_U)
-RU = namedtuple('RUnits', _lower_RU.keys())(**_lower_RU)

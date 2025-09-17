@@ -51,11 +51,13 @@ class TabulatedEOS(ABC):
         self,
         path: Optional[str] = None,
         code_units: str = "CGS",
+        warn_outliers: bool = True,
         **kwargs):
 
         self.name = "Unitilialized"
         self.conversions: dict[str, Callable[[UnitSystem, UnitSystem], float]] = {}
         self.code_units = unit_systems[code_units]
+        self.warn_outliers = warn_outliers
         if path is None:
             return
         self.post_init(path, **kwargs)
@@ -364,17 +366,19 @@ class TabulatedEOS(ABC):
         for name, inp in inputs.items():
             if inp.shape != inp_shape:
                 raise ValueError("Inputs have to have the same shape")
-            for key, val_range in self.range.items():
-                if name == key:
-                    clipped = np.clip(inp, *val_range)
-                    if np.any(clipped != inp):
-                        outliers = inp[clipped != inp]
-                        warn(
-                            f"{name} = {outliers} out of range {val_range} of EOS {self.name}")
-                    clipped_inputs[name] = clipped
-                    break
-            else:
+            # inp
+            # for key, val_range in self.range.items():
+                # if name == key:
+            try:
+                val_range = self.range[name]
+            except KeyError:
                 raise ValueError(f"Invalid argument {name}")
+            clipped = np.clip(inp, *val_range)
+            if np.any(out_mask := (clipped != inp)):
+                outliers = inp[out_mask]
+                if self.warn_outliers:
+                    warn(f"{name} = {outliers} out of range {val_range} of EOS {self.name}")
+            clipped_inputs[name] = clipped
         return clipped_inputs, inp_shape
 
     def _prepare_inputs(
