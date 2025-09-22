@@ -111,7 +111,8 @@ class TabulatedEOS(ABC):
         return self.get_key(key) * self.unit_conversion(key)
 
 
-    def inverse_call(self, **kwargs: "ArrayLike") -> "ND":
+    def inverse_call(self, fail_out_of_bounds=False,
+                     **kwargs: "ArrayLike") -> "ND":
         """
         Solve for the missing one among {'ye','temp','rho'} so that
         field_table(ye, temp, rho) == field_value.
@@ -198,16 +199,18 @@ class TabulatedEOS(ABC):
 
         inc = f_hi > f_lo
 
-        bad = f_lo * f_hi > 0
-        if np.any(bad):
+        bad_low  = np.where(inc, 0 <= f_lo, 0 >= f_lo)
+        bad_high = np.where(inc, 0 >= f_hi, 0 <= f_hi)
+        bad = (bad_low | bad_high)
+        if bad.any() and fail_out_of_bounds:
             raise ValueError(
                 f"value out of range along '{C}' for some elements (cannot bracket)."
             )
+        notbad = ~bad
 
-        # Batched index bisection: O(log2(nC)) lookups on the target axis only
         max_iter = int(np.ceil(np.log2(nC))) + 2
         for _ in range(max_iter):
-            active = (hi - lo) > 1
+            active = notbad & ((hi - lo) > 1)
             if not np.any(active):
                 break
             mid = (lo + hi) // 2
@@ -227,8 +230,11 @@ class TabulatedEOS(ABC):
         x_hi = gC[hi]
         denom = (f_lo - f_hi)
         t = np.divide(f_lo, denom, out=np.zeros_like(tv, dtype=float), where=denom != 0.0)
-        t = np.clip(t, 0.0, 1.0)  # be safe near flat spots
+        t = np.clip(t, 0.0, 1.0)
         x = x_lo + t * (x_hi - x_lo)
+
+        x = np.where(bad_low, gC[0], x)
+        x = np.where(bad_high, gC[-1], x)
 
         if C in self.log_names:
             return 10**x
@@ -511,11 +517,11 @@ def batched_bisection(eval_f, a, b, *, xtol=1e-8, maxiter=100):
         mid = 0.5 * (lo + hi)
         f_mid = eval_f(mid)
 
-        left_interval = f_lo * f_mid <= 0  # keep [lo, mid] where sign changes
+        left_interval = f_lo * f_mid <= 0
         hi = np.where(left_interval, mid, hi)
         f_hi = np.where(left_interval, f_mid, f_hi)
 
-        right_interval = ~left_interval   # keep [mid, hi] otherwise
+        right_interval = ~left_interval
         lo = np.where(right_interval, mid, lo)
         f_lo = np.where(right_interval, f_mid, f_lo)
 
