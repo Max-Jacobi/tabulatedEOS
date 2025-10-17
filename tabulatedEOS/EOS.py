@@ -3,7 +3,8 @@ from typing import Callable, Optional, TYPE_CHECKING, Any
 from functools import reduce, cached_property, lru_cache
 from warnings import warn
 import numpy as np
-import alpyne.uniform_interpolation as ui  # type: ignore
+# import alpyne.uniform_interpolation as ui  # type: ignore
+from scipy.interpolate import RegularGridInterpolator
 
 from .unit_system import unit_systems, UnitSystem
 
@@ -52,12 +53,14 @@ class TabulatedEOS(ABC):
         path: Optional[str] = None,
         code_units: str = "CGS",
         warn_outliers: bool = True,
+        RGI_kwargs: dict[str, Any] = {},
         **kwargs):
 
         self.name = "Unitilialized"
         self.conversions: dict[str, Callable[[UnitSystem, UnitSystem], float]] = {}
         self.code_units = unit_systems[code_units]
         self.warn_outliers = warn_outliers
+        self.RGI_kwargs = RGI_kwargs
         if path is None:
             return
         self.post_init(path, **kwargs)
@@ -244,11 +247,13 @@ class TabulatedEOS(ABC):
     def _read_table(self) -> None:
         self._offsets = {}
         self._inv_steps = {}
+        self._table = {}
 
         for name, key in self.table_keys.items():
             dat = self.get_key_with_units(key)
             if name in self.log_names:
                 dat = np.log10(dat)
+            self._table[name] = dat
             self._offsets[name] = dat[0]
             if len(dat) > 1:
                 self._inv_steps[name] = 1/(dat[1]-dat[0])
@@ -278,23 +283,25 @@ class TabulatedEOS(ABC):
             inputs, shape = self._check_inputs(inputs)
 
             inps, finite_mask = self._prepare_inputs(inputs)
-            offsets, inv_steps = self._prepare_table(arguments)
+            # offsets, inv_steps = self._prepare_table(arguments)
+            table = self._prepare_table(arguments)
 
             data = self._slice_data(keys, data_slice)
             data, islog = self._logspace_data(data)
 
-            if len(inps) == 1:
-                offsets = np.float64(offsets)
-                inv_steps = np.float64(inv_steps)
-                result = ui.linterp1D(inps[0], offsets, inv_steps, data)
-            elif len(inps) == 2:
-                result = ui.linterp2D(
-                    inps[0], inps[1], offsets, inv_steps, data)
-            elif len(inps) == 3:
-                result = ui.linterp3D(
-                    inps[0], inps[1], inps[2], offsets, inv_steps, data)
-            else:
-                raise ValueError("Too many arguments")
+            result = RegularGridInterpolator(table, data, **self.RGI_kwargs)(inps)
+            # if len(inps) == 1:
+            #     offsets = np.float64(offsets)
+            #     inv_steps = np.float64(inv_steps)
+            #     result = ui.linterp1D(inps[0], offsets, inv_steps, data)
+            # elif len(inps) == 2:
+            #     result = ui.linterp2D(
+            #         inps[0], inps[1], offsets, inv_steps, data)
+            # elif len(inps) == 3:
+            #     result = ui.linterp3D(
+            #         inps[0], inps[1], inps[2], offsets, inv_steps, data)
+            # else:
+            #     raise ValueError("Too many arguments")
 
             result = self._reshape_result(result, shape, finite_mask, islog)
 
@@ -408,9 +415,10 @@ class TabulatedEOS(ABC):
         return args, finite_mask
 
     def _prepare_table(self, arguments: list[str]):
-        offsets = np.array([self._offsets[name] for name in self.table_keys if name in arguments])
-        inv_steps = np.array([self._inv_steps[name] for name in self.table_keys if name in arguments])
-        return offsets, inv_steps
+        # offsets = np.array([self._offsets[name] for name in self.table_keys if name in arguments])
+        # inv_steps = np.array([self._inv_steps[name] for name in self.table_keys if name in arguments])
+        table = tuple(self._table[name]  for name in self.table_keys if name in arguments)
+        return table
 
     def _slice_data(
         self,

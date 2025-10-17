@@ -16,7 +16,8 @@ authors = [
 dependencies = [
   "numpy",
   "h5py",
-  "alpyne @ git+https://github.com/fguercilena/alpyne@e2f9261b271e0529c1eb9f63b796c1a02e5b0fbb",
+  "scipy",
+  #"alpyne @ git+https://github.com/fguercilena/alpyne@e2f9261b271e0529c1eb9f63b796c1a02e5b0fbb",
 ]
 
 [tool.setuptools.packages.find]

@@ -5,4 +5,4 @@ The code is written for tabulated EOS in the Pizza format for the [[https://bitb
 ** Dependencies
   - numpy
   - h5py
-  - [[https://github.com/fguercilena/alpyne][alpyne]]
+  - scipy
