@@ -1,6 +1,10 @@
 * Routine for interpolating in tabulated EOS tables
 
-The code is written for tabulated EOS in the Pizza format for the [[https://bitbucket.org/FreeTHC/dist][WhiskyTHC]] code in [[https://www.einsteintoolkit.org/][Einstein Toolkit]].
+The code is written for tabulated EOSs in the various formats:
+  - Pizza format for the [[https://bitbucket.org/FreeTHC/dist][WhiskyTHC]] code in [[https://www.einsteintoolkit.org/][Einstein Toolkit]].
+  - [[https://github.com/computationalrelativity/PyCompOSE][PyCompOSE]] format for [[https://github.com/computationalrelativity/gr-athena][GRAthena++]] and [[https://github.com/IAS-Astrophysics/athenak][AthenaK]]
+  - StellarCollapse format from [[https://stellarcollapse.org][Stellarcollapse.org]]
+  - The SNA baryon-only format in the [[https://bitbucket.org/andschn/sroeos][SRO code]] 
 
 ** Dependencies
   - numpy
