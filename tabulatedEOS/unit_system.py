@@ -102,6 +102,24 @@ GeometricKilometer = UnitSystem(
     chemicalPotential=1.0 / CGS.MeV,                                  # MeV
 )
 
+# Geometric units with length in meters
+GeometricMeter = UnitSystem(
+    c=1.0,
+    Gnewt=1.0,
+    kb=1.0,
+    Msun=CGS.Msun * CGS.Gnewt / (CGS.c * CGS.c) * 1e-2,               # m
+    MeV=CGS.MeV * CGS.Gnewt / (CGS.c**4) * 1e-2,                      # m
+
+    length=1e-2,                                                      # m
+    time=CGS.c * 1e-2,                                                # m
+    density=1e6,                                                      # m^-3
+    mass=CGS.Gnewt / (CGS.c * CGS.c) * 1e-2,                          # m
+    energy=CGS.Gnewt / (CGS.c**4) * 1e-2,                             # m
+    pressure=CGS.Gnewt / (CGS.c**4) * 1e4,                            # m^-2
+    temperature=CGS.kb * CGS.Gnewt / (CGS.c**4) * 1e-2,               # m
+    chemicalPotential=1.0 / CGS.MeV,                                  # MeV
+)
+
 # Geometric units with length in solar masses
 GeometricSolar = UnitSystem(
     c=1.0,
