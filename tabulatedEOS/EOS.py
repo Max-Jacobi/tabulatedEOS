@@ -155,7 +155,7 @@ class TabulatedEOS(ABC):
             g[k] = np.log10(g[k])
         T0 = self.get_key_with_units(field_key)
 
-        if np.all(T0 > 0):
+        if np.all(T0 > 0) and np.all(target_val > 0):
             target_val = np.log10(target_val)
             T0 = np.log10(T0)
 
