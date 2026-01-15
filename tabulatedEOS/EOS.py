@@ -91,6 +91,7 @@ class TabulatedEOS(ABC):
         ...
 
     @abstractmethod
+    @lru_cache(maxsize=10)
     def get_key(self, key: str) -> "Array1D | Array3D":
         """
         Returns the raw data for the given key.

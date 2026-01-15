@@ -1,6 +1,6 @@
 import os
-from functools import lru_cache
-from typing import Optional
+from functools import lru_cache, cached_property
+from typing import TYPE_CHECKING
 
 import numpy as np
 from h5py import File, Dataset
@@ -8,6 +8,10 @@ from h5py import File, Dataset
 from .EOS import TabulatedEOS
 from .unit_system import Nuclear
 from .unit_system import UnitSystem as US
+
+if TYPE_CHECKING:
+    from .EOS import Array1D, Array3D
+
 
 
 class PyCompOSEEOS(TabulatedEOS):
@@ -33,13 +37,13 @@ class PyCompOSEEOS(TabulatedEOS):
 
         self.conversions["rho"] = US.MassDensityConversion
         self.conversions["t"] = US.TemperatureConversion
-        self.conversions["Q1"] = _conv_Q1
-        self.conversions["Q2"] = US.EntropyConversion
-        self.conversions["Q3"] = US.ChemicalPotentialConversion
-        self.conversions["Q4"] = US.ChemicalPotentialConversion
-        self.conversions["Q5"] = US.ChemicalPotentialConversion
-        self.conversions["Q6"] = _conv_Q67
-        self.conversions["Q7"] = _conv_Q67
+        self.conversions["Q1"] = _conv_Q1                        # P/n_B
+        self.conversions["Q2"] = US.EntropyConversion            # S/n_B
+        self.conversions["Q3"] = US.ChemicalPotentialConversion  # mu_B
+        self.conversions["Q4"] = US.ChemicalPotentialConversion  # mu_Q
+        self.conversions["Q5"] = US.ChemicalPotentialConversion  # mu_L
+        self.conversions["Q6"] = _conv_Q67                       # h = (e + P)/(m_B*n_B)
+        self.conversions["Q7"] = _conv_Q67                       # e/(m_B*n_B) - 1
         self.conversions["press"] = US.PressureConversion
 
         self.path = path
@@ -49,7 +53,7 @@ class PyCompOSEEOS(TabulatedEOS):
         self.name = os.path.basename(os.path.dirname(path))
 
     @lru_cache(maxsize=10)
-    def get_key(self, key: str) -> np.ndarray:
+    def get_key(self, key: str) -> "Array1D | Array3D":
         """
         returns the dataset < key > from the h5 file
         rho is converted from nb
@@ -93,7 +97,10 @@ class PyCompOSEEOS(TabulatedEOS):
                 hfile.keys()
                 ))
 
-
+    @cached_property
+    def hinf(self) -> float:
+        """returns the minimum enthalpy in the table"""
+        return np.min(self.get_key_with_units('Q6'))
 
 
 def _conv_Q1(*args: US) -> float:
