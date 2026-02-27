@@ -36,7 +36,6 @@ class PyCompOSEEOS(TabulatedEOS):
         self.eos_units = Nuclear
 
         self.conversions["rho"] = US.MassDensityConversion
-        self.conversions["t"] = US.TemperatureConversion
         self.conversions["Q1"] = _conv_Q1                        # P/n_B
         self.conversions["Q2"] = US.EntropyConversion            # S/n_B
         self.conversions["Q3"] = US.ChemicalPotentialConversion  # mu_B

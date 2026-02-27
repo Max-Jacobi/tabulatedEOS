@@ -290,6 +290,8 @@ class TabulatedEOS(ABC):
             data = self._slice_data(keys, data_slice)
             data, islog = self._logspace_data(data)
 
+            inps = np.squeeze(inps)
+
             result = RegularGridInterpolator(table, data, **self.RGI_kwargs)(inps)
             # if len(inps) == 1:
             #     offsets = np.float64(offsets)
@@ -436,7 +438,7 @@ class TabulatedEOS(ABC):
             return data
 
         data = np.array([slice_data(self.get_key_with_units(kk)) for kk in keys])
-        return data
+        return np.squeeze(data)
 
     def _logspace_data(
         self,

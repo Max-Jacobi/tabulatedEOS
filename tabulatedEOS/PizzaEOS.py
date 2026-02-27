@@ -33,7 +33,6 @@ class PizzaEOS(TabulatedEOS):
         self.conversions["rho"] = US.MassDensityConversion
         self.conversions["density"] = US.MassDensityConversion
         self.conversions["temp"] = US.TemperatureConversion
-        self.conversions["temperature"] = US.TemperatureConversion
         self.conversions["internalEnergy"] = _conv_eps
         self.conversions["entropy"] = US.EntropyConversion
         self.conversions["pressure"] = US.PressureConversion
