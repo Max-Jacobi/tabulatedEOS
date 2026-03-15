@@ -38,9 +38,6 @@ class PyCompOSEEOS(TabulatedEOS):
         self.conversions["rho"] = US.MassDensityConversion
         self.conversions["Q1"] = _conv_Q1                        # P/n_B
         self.conversions["Q2"] = US.EntropyConversion            # S/n_B
-        self.conversions["Q3"] = US.ChemicalPotentialConversion  # mu_B
-        self.conversions["Q4"] = US.ChemicalPotentialConversion  # mu_Q
-        self.conversions["Q5"] = US.ChemicalPotentialConversion  # mu_L
         self.conversions["Q6"] = _conv_Q67                       # h = (e + P)/(m_B*n_B)
         self.conversions["Q7"] = _conv_Q67                       # e/(m_B*n_B) - 1
         self.conversions["press"] = US.PressureConversion

@@ -290,9 +290,7 @@ class TabulatedEOS(ABC):
             data = self._slice_data(keys, data_slice)
             data, islog = self._logspace_data(data)
 
-            inps = np.squeeze(inps)
-
-            result = RegularGridInterpolator(table, data, **self.RGI_kwargs)(inps)
+            result = [RegularGridInterpolator(table, d, **self.RGI_kwargs)(inps) for d in data]
             # if len(inps) == 1:
             #     offsets = np.float64(offsets)
             #     inv_steps = np.float64(inv_steps)
@@ -400,7 +398,7 @@ class TabulatedEOS(ABC):
     def _prepare_inputs(
         self,
         inputs: dict[str, "ND"],
-    ) -> tuple[list["ND"], "Mask"]:
+    ) -> tuple["ND", "Mask"]:
         c_inputs = inputs.copy()
         for name in inputs:
             if name in self.log_names:
@@ -414,7 +412,7 @@ class TabulatedEOS(ABC):
             np.logical_and,
             [np.isfinite(arg) for arg in args],
         )
-        args = [arg[finite_mask] for arg in args]
+        args = np.transpose([arg[finite_mask] for arg in args])
         return args, finite_mask
 
     def _prepare_table(self, arguments: list[str]):
@@ -437,8 +435,7 @@ class TabulatedEOS(ABC):
                     data = data.take(data_slice[tk], axis=ii)
             return data
 
-        data = np.array([slice_data(self.get_key_with_units(kk)) for kk in keys])
-        return np.squeeze(data)
+        return np.array([slice_data(self.get_key_with_units(kk)) for kk in keys])
 
     def _logspace_data(
         self,
@@ -477,7 +474,7 @@ class TabulatedEOS(ABC):
 
     @staticmethod
     def _reshape_result(
-        result: "ND",
+        result: list["ND"],
         shape: tuple[int, ...],
         finite_mask: "Mask",
         islog: "Mask",
