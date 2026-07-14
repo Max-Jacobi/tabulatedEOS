@@ -38,7 +38,7 @@ class PyCompOSEEOS(TabulatedEOS):
         self.conversions["rho"] = US.MassDensityConversion
         self.conversions["Q1"] = _conv_Q1                        # P/n_B
         self.conversions["Q2"] = US.EntropyConversion            # S/n_B
-        self.conversions["Q6"] = _conv_Q67                       # h = (e + P)/(m_B*n_B)
+        self.conversions["Q6"] = _conv_Q67                       # f/(m_B*n_B) - 1 (free energy!)
         self.conversions["Q7"] = _conv_Q67                       # e/(m_B*n_B) - 1
         self.conversions["press"] = US.PressureConversion
 
@@ -65,6 +65,10 @@ class PyCompOSEEOS(TabulatedEOS):
             _key = 'Q2'
         elif key == 'rho':
             _key = 'nb'
+        elif key == 'enthalpy':
+            # h = (e + P)/(m_B n_B), dimensionless;
+            # note that Q6 is the free energy, NOT the enthalpy
+            return 1 + self.get_key('Q7') + self.get_key('Q1')/self.mass_factor
         else:
             _key = key
 
@@ -95,8 +99,10 @@ class PyCompOSEEOS(TabulatedEOS):
 
     @cached_property
     def hinf(self) -> float:
-        """returns the minimum enthalpy in the table"""
-        return np.min(self.get_key_with_units('Q6'))
+        """returns the minimum (dimensionless) enthalpy in the table"""
+        # NOT min(Q6): Q6 is the free energy per baryon (minus one), which
+        # is hugely negative in the high temperature corners of the table
+        return float(np.min(self.get_key('enthalpy')))
 
 
 def _conv_Q1(*args: US) -> float:
