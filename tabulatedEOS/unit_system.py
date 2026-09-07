@@ -51,6 +51,9 @@ class UnitSystem:
     def EnergyConversion(self, b: "UnitSystem") -> float:
         return b.energy / self.energy
 
+    def SpecificEnergyConversion(self, b: "UnitSystem") -> float:
+        return b.energy / self.energy * self.mass / b.mass
+
     def EntropyConversion(self, b: "UnitSystem") -> float:
         return b.kb / self.kb
 
@@ -157,9 +160,27 @@ Nuclear = UnitSystem(
     chemicalPotential=1.0 / CGS.MeV,                                  # MeV
 )
 
+WeakRatesUnits = UnitSystem(
+    c=CGS.c,                                                          # c, cm/s
+    Gnewt = CGS.Gnewt,                                                # G, cm^3 g^-1 s^-2
+    kb=CGS.kb,                                                        # kb, erg K^-1
+    Msun=CGS.Msun,                                                    # Msun, g
+    MeV=CGS.MeV,                                                      # MeV, erg
+
+    length=CGS.length,                                                # length, cm
+    time=CGS.time,                                                    # time, s
+    density=CGS.density,                                              # number density, cm^-3
+    mass=CGS.mass,                                                    # mass, g
+    energy=CGS.energy,                                                # energy, erg
+    pressure=CGS.pressure,                                            # pressure, erg/cm^3
+    temperature=CGS.kb / CGS.MeV,                                     # temperature, MeV
+    chemicalPotential=CGS.kb / CGS.MeV,                               # chemical potential,
+)
+
 unit_systems = {
     "CGS": CGS,
     "GeometricSolar": GeometricSolar,
     "GeometricKilometer": GeometricKilometer,
     "Nuclear": Nuclear,
+    "WeakRates": WeakRatesUnits,
     }
